@@ -1,5 +1,7 @@
 <resources>
-    <string name = "paired_devices">Paired devices</string>
-    <string name = "search_devices">Search devices...</string>
-    <string name = "empty">Empty</string>
+    <string name="paired_devices">Paired devices</string>
+    <string name="search_devices">Search devices...</string>
+    <string name="empty">Empty</string>
+    <!-- TODO: Remove or change this placeholder text -->
+    <string name="hello_blank_fragment">Hello blank fragment</string>
 </resources>
