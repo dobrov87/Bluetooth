@@ -60,7 +60,7 @@ class ItemAdapter(private val listener: Listener, val adapterType: Boolean) :
             checkBox.visibility = if (adatperType) View.GONE else View.VISIBLE
             item1 = item
             try {
-                deviceName.text = item.device.name ?:"Unknow"
+                deviceName.text = item.device.name
                 deviceMac.text = item.device.address
             } catch (e: SecurityException) {
             }
