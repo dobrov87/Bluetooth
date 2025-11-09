@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.*
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -13,6 +14,7 @@ import android.util.Log
 import android.view.*
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -133,7 +135,11 @@ class DeviceListFragment : Fragment(), ItemAdapter.Listener {
 
             // Если Bluetooth включён — начинаем поиск
             if (btAdapter.isEnabled) {
-                btAdapter.cancelDiscovery() // сброс предыдущего поиска
+                if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN)
+                    == PackageManager.PERMISSION_GRANTED) {
+                    btAdapter.cancelDiscovery()
+                }
+
                 btAdapter.startDiscovery()  // запуск нового
 
                 // Меняем отображение кнопки / прогресс-бара
@@ -149,9 +155,9 @@ class DeviceListFragment : Fragment(), ItemAdapter.Listener {
     private fun checkPermissions(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // Начиная с Android 12 нужны дополнительные разрешения
-            ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) ==
+            ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN) ==
                     android.content.pm.PackageManager.PERMISSION_GRANTED &&
-                    ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.ACCESS_FINE_LOCATION) ==
+                    ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) ==
                     android.content.pm.PackageManager.PERMISSION_GRANTED
         } else {
             // До Android 12 достаточно только доступа к местоположению
@@ -166,7 +172,7 @@ class DeviceListFragment : Fragment(), ItemAdapter.Listener {
             permissionLauncher.launch(
                 arrayOf(
                     Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.ACCESS_FINE_LOCATION
+                    Manifest.permission.BLUETOOTH_SCAN
                 )
             )
         } else {
@@ -224,6 +230,10 @@ class DeviceListFragment : Fragment(), ItemAdapter.Listener {
                         }
                         binding.tvEmptySearch.visibility = if (current.isEmpty()) View.VISIBLE else View.GONE
                     }
+
+
+
+
                 }
 
                 // Когда завершён процесс поиска

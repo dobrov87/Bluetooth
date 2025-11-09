@@ -1,232 +1,270 @@
-/*package com.example.bt_def
+/*
+package com.example.bt_def
 
 import android.Manifest
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.content.SharedPreferences
+import android.content.*
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.util.Log
-import androidx.fragment.app.Fragment
-import android.view.LayoutInflater
-import android.view.View
-import android.view.ViewGroup
+import android.view.*
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.bt_def.databinding.FragmentListBinding
 import com.google.android.material.snackbar.Snackbar
 
-class DeviceListFragmentTest : Fragment(), ItemAdapter.Listener {
-    private var preferences: SharedPreferences? = null
-    private lateinit var binding: FragmentListBinding
-    private var bAdapter: BluetoothAdapter? = null
-    private lateinit var btLauncher: ActivityResultLauncher<Intent>
-    private lateinit var itemAdapter: ItemAdapter //#7
-    private lateinit var discoveryAdapter: ItemAdapter
-    private lateinit var pLauncher: ActivityResultLauncher<Array<String>>
+/**
+ * Фрагмент для отображения списка Bluetooth-устройств:
+ *  - включает Bluetooth (через системный интент)
+ *  - показывает список спаренных устройств
+ *  - ищет новые устройства
+ *  - сохраняет выбранное устройство в SharedPreferences
+ *
+ * Работает на Android 6–15.
+ */
+class DeviceListFragment : Fragment(), ItemAdapter.Listener {
 
+    private lateinit var binding: FragmentListBinding             // ViewBinding для layout
+    private lateinit var btAdapter: BluetoothAdapter               // Основной Bluetooth адаптер
+    private lateinit var enableBtLauncher: ActivityResultLauncher<Intent> // Для включения Bluetooth
+    private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>> // Для запроса разрешений
+    private lateinit var pairedAdapter: ItemAdapter                // Адаптер для спаренных устройств
+    private lateinit var discoveryAdapter: ItemAdapter             // Адаптер для найденных устройств
+    private var prefs: SharedPreferences? = null                   // Для сохранения MAC выбранного устройства
 
+    // ---------- Создание представления ----------
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View {
-        // Inflate the layout for this fragment
         binding = FragmentListBinding.inflate(inflater, container, false)
         return binding.root
     }
 
+    // ---------- После создания view ----------
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        preferences =
-            activity?.getSharedPreferences(BluetoothConstants.PREFERENCES, Context.MODE_PRIVATE)
 
-        binding.imBluetoothOn.setOnClickListener {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
-            } else {
-                btLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-            }
-            Log.d("MyLog", "Кнопка нажата!")
-        }
+        // Получаем SharedPreferences для хранения MAC выбранного устройства
+        prefs = requireContext().getSharedPreferences(BluetoothConstants.PREFERENCES, Context.MODE_PRIVATE)
 
+        // Инициализация основных компонентов
+        initBluetooth()
+        initRecyclerViews()
+        initLaunchers()
+        registerReceiver()
 
-        binding.imBluetoothSearch.setOnClickListener {
+        // Проверяем текущее состояние Bluetooth и обновляем UI
+        updateBluetoothState()
 
-            try {        //переделать для 12+
-                if (bAdapter?.isEnabled == true) {
-                    bAdapter?.startDiscovery()
-                    it.visibility = View.GONE
-                    binding.pbSearch.visibility = View.VISIBLE
-                }
-
-            } catch (e: SecurityException) {
-
-            }
-        }
-        intentFilters()
-        checkPermissions()
-        initRcViews()
-        registerBtLauncher()
-        initBtAdapter()
-        bluetoothState()
+        // Устанавливаем слушатели кнопок
+        setupListeners()
     }
 
-    private fun initRcViews() = with(binding) {
+    override fun onDestroyView() {
+        super.onDestroyView()
+        // Всегда важно снимать регистрацию ресиверов во избежание утечек памяти
+        requireActivity().unregisterReceiver(btReceiver)
+    }
+
+    // ---------- Инициализация Bluetooth ----------
+    private fun initBluetooth() {
+        val manager = requireContext().getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        btAdapter = manager.adapter
+    }
+
+    // ---------- Настройка RecyclerView ----------
+    private fun initRecyclerViews() = with(binding) {
+        pairedAdapter = ItemAdapter(this@DeviceListFragment, false)
+        discoveryAdapter = ItemAdapter(this@DeviceListFragment, true)
+
         rcViewPaired.layoutManager = LinearLayoutManager(requireContext())
         rcViewSearch.layoutManager = LinearLayoutManager(requireContext())
-        itemAdapter = ItemAdapter(this@DeviceListFragmentTest, false)
-        discoveryAdapter = ItemAdapter(this@DeviceListFragmentTest, true)
-        rcViewPaired.adapter = itemAdapter
+
+        rcViewPaired.adapter = pairedAdapter
         rcViewSearch.adapter = discoveryAdapter
     }
 
-    private fun getPairedDevices() {
+    // ---------- Регистрация ActivityResult-обработчиков ----------
+    private fun initLaunchers() {
+        // 1️⃣ Лаунчер для включения Bluetooth
+        enableBtLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            // Вызывается после возвращения из системного диалога включения Bluetooth
+            updateBluetoothState()
+        }
 
-        try {
-            val list = ArrayList<ListItem>()
-            val deviceList = bAdapter?.bondedDevices as Set<BluetoothDevice>
-            deviceList.forEach {
-                list.add(
-                    ListItem(
-                        it,
-                        preferences?.getString(BluetoothConstants.MAC, "") == it.address
-                    )
-                )
+        // 2️⃣ Лаунчер для запроса разрешений
+        permissionLauncher =
+            registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    }
+
+    // ---------- Установка слушателей кнопок ----------
+    private fun setupListeners() = with(binding) {
+
+        // 🔘 Кнопка включения Bluetooth
+        imBluetoothOn.apply {
+            isClickable = true
+            isFocusable = true
+
+            setOnClickListener {
+                if (btAdapter.isEnabled) {
+                    // Уже включен — просто уведомляем
+                    Snackbar.make(root, "Bluetooth уже включён", Snackbar.LENGTH_SHORT).show()
+                } else {
+                    // Запускаем системный диалог включения Bluetooth
+                    enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                }
             }
-            binding.tvEmptyPaired.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
-            itemAdapter.submitList(list)
-        } catch (e: SecurityException) {
-
         }
 
-    }
+        // 🔍 Кнопка поиска устройств
+        imBluetoothSearch.setOnClickListener {
+            if (!checkPermissions()) {
+                // Если нет разрешений — запрашиваем
+                requestPermissions()
+                return@setOnClickListener
+            }
 
-    private fun bluetoothState() {
-        if (bAdapter?.isEnabled == true) {
-            changeButtonColor(binding.imBluetoothOn, Color.GREEN)
-            getPairedDevices()
-        }
+            // Если Bluetooth включён — начинаем поиск
+            if (btAdapter.isEnabled) {
+                if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN)
+                    == PackageManager.PERMISSION_GRANTED) {
+                    btAdapter.cancelDiscovery()
+                }
 
-    }
+                btAdapter.startDiscovery()  // запуск нового
 
-    private fun initBtAdapter() {
-        val bManager = activity?.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        bAdapter = bManager.adapter
-    }
-
-    private fun registerBtLauncher() {
-
-        btLauncher = registerForActivityResult(
-            ActivityResultContracts.StartActivityForResult()
-        ) {
-            if (it.resultCode == Activity.RESULT_OK) {
-                changeButtonColor(binding.imBluetoothOn, Color.GREEN)
-                Snackbar.make(binding.root, "Bluetooth is enabled", Snackbar.LENGTH_LONG).show()
-                getPairedDevices()
+                // Меняем отображение кнопки / прогресс-бара
+                imBluetoothSearch.visibility = View.GONE
+                pbSearch.visibility = View.VISIBLE
             } else {
-                Snackbar.make(binding.root, "Bluetooth is turned off", Snackbar.LENGTH_LONG).show()
-                getPairedDevices()
+                Snackbar.make(root, "Включите Bluetooth для поиска", Snackbar.LENGTH_SHORT).show()
             }
         }
-
     }
 
-    private fun checkPermissions() {
-        if (!checkBtPermissions()) {
-            registerPermissionLister()
-            launchBtPermissions()
+    // ---------- Проверка разрешений ----------
+    private fun checkPermissions(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Начиная с Android 12 нужны дополнительные разрешения
+            ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_SCAN) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED &&
+                    ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.BLUETOOTH_CONNECT) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else {
+            // До Android 12 достаточно только доступа к местоположению
+            ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.ACCESS_FINE_LOCATION) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
         }
     }
 
-    private fun launchBtPermissions() {
+    // ---------- Запрос разрешений ----------
+    private fun requestPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            pLauncher.launch(
+            permissionLauncher.launch(
                 arrayOf(
                     Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.ACCESS_FINE_LOCATION,
                     Manifest.permission.BLUETOOTH_SCAN
                 )
             )
         } else {
-            pLauncher.launch(
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION
-                )
-            )
+            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
         }
     }
 
-    private fun registerPermissionLister() {
-        pLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions())
-        {
-
+    // ---------- Обновление состояния Bluetooth ----------
+    private fun updateBluetoothState() {
+        if (btAdapter.isEnabled) {
+            // Если Bluetooth включен — окрашиваем кнопку в зелёный и показываем устройства
+            binding.imBluetoothOn.setColorFilter(Color.GREEN)
+            getPairedDevices()
+        } else {
+            // Если выключен — красный цвет и очищаем список
+            binding.imBluetoothOn.setColorFilter(Color.RED)
+            pairedAdapter.submitList(emptyList())
         }
     }
 
-    private fun saveMac(mac: String) {
-        val editor = preferences?.edit()
-        editor?.putString(BluetoothConstants.MAC, mac)
-        editor?.apply()
+    // ---------- Получение списка спаренных устройств ----------
+    private fun getPairedDevices() {
+        try {
+            val list = btAdapter.bondedDevices.map {
+                // Проверяем, совпадает ли MAC с сохранённым в настройках
+                ListItem(it, prefs?.getString(BluetoothConstants.MAC, "") == it.address)
+            }
+            pairedAdapter.submitList(list)
+            binding.tvEmptyPaired.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
+        } catch (e: SecurityException) {
+            Log.e("BT", "Нет разрешений на чтение спаренных устройств")
+        }
     }
 
+    // ---------- BroadcastReceiver для Bluetooth-событий ----------
+    private val btReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                // Когда найдено новое устройство
+                BluetoothDevice.ACTION_FOUND -> {
+                    val device: BluetoothDevice? =
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                        }
 
-    override fun onClick(device: ListItem) {
-        saveMac(device.device.address)
-    }
+                    // Добавляем устройство в список, если его там ещё нет
+                    device?.let {
+                        val current = discoveryAdapter.currentList.toMutableList()
+                        if (!current.any { d -> d.device.address == device.address }) {
+                            current.add(ListItem(device, false))
+                            discoveryAdapter.submitList(current)
+                        }
+                        binding.tvEmptySearch.visibility = if (current.isEmpty()) View.VISIBLE else View.GONE
+                    }
 
-    private val bReceiver = object : BroadcastReceiver() {
-        override fun onReceive(p0: Context?, intent: Intent?) {
-            if (intent?.action == BluetoothDevice.ACTION_FOUND) {
 
 
 
-                val device: BluetoothDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-
-                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                 }
 
+                // Когда завершён процесс поиска
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                    binding.imBluetoothSearch.visibility = View.VISIBLE
+                    binding.pbSearch.visibility = View.GONE
+                }
 
-
-
-         /*       val device =
-                    intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) */
-                val list = mutableListOf<ListItem>()
-                list.addAll(discoveryAdapter.currentList)
-                if (device != null) list.add(ListItem(device, false))
-                discoveryAdapter.submitList(list.toList())
-                binding.tvEmptySearch.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
-                Log.d("MyLog", "Device: ${device?.name}")
-            } else if (intent?.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
-                getPairedDevices()
-            } else if (intent?.action == BluetoothAdapter.ACTION_DISCOVERY_FINISHED) {
-                binding.imBluetoothSearch.visibility = View.VISIBLE
-                binding.pbSearch.visibility = View.GONE
+                // Когда изменилось состояние спаривания
+                BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
+                    getPairedDevices()
+                }
             }
         }
-
     }
 
-    private fun intentFilters() {
-        val f1 = IntentFilter(BluetoothDevice.ACTION_FOUND)
-        val f2 = IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
-        val f3 = IntentFilter(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
-        activity?.registerReceiver(bReceiver, f1)
-        activity?.registerReceiver(bReceiver, f2)
-        activity?.registerReceiver(bReceiver, f3)
+    // ---------- Регистрация ресивера ----------
+    private fun registerReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
+        requireActivity().registerReceiver(btReceiver, filter)
+    }
+
+    // ---------- Обработка кликов по элементам списка ----------
+    override fun onClick(device: ListItem) {
+        prefs?.edit()?.putString(BluetoothConstants.MAC, device.device.address)?.apply()
+        Snackbar.make(binding.root, "Выбрано устройство: ${device.device.name}", Snackbar.LENGTH_SHORT).show()
     }
 }
-
 */

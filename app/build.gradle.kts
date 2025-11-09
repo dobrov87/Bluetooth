@@ -35,6 +35,11 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+    buildFeatures {
+        viewBinding = true
+    }
+
+
 }
 
 dependencies {
@@ -45,6 +50,8 @@ dependencies {
     implementation(libs.androidx.constraintlayout)
 
     implementation(project(":bt_def"))
+    implementation(libs.androidx.navigation.fragment.ktx)
+    implementation(libs.androidx.navigation.ui.ktx)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
