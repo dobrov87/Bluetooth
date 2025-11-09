@@ -4,6 +4,8 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
 import android.os.Message
 import android.util.Log
+import android.widget.Toast
+import androidx.core.content.ContentProviderCompat.requireContext
 import java.io.IOError
 import java.io.IOException
 import java.util.UUID
@@ -27,13 +29,17 @@ class ConnectThread(device: BluetoothDevice, val listener: BluetoothController.L
 
     override fun run() {
         try {
-
+            Log.d("connect", "Try to connect with device")
             mSocket?.connect()
             listener.onReceive(BluetoothController.BLUETOOTH_CONNECTED)
+            Log.d("connect", "Connect with device")
 
 
         } catch (e: IOException) {
+
             listener.onReceive(BluetoothController.BLUETOOTH_NO_CONNECTED)
+            Log.e("BT", "Нет разрешений для Bluetooth", e)
+
 
         } catch (e: SecurityException) {
 
